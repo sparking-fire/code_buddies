@@ -1,14 +1,8 @@
 import streamlit as st
-import os
 import pdfplumber
-import requests
-import json
+from groq import Groq, GroqError
 from fpdf import FPDF
-
-# Your Groq API key (Store it securely, do not hardcode in production)
-GROQ_API_KEY = "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"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
+import os
 
 # Function to extract text from PDF
 def extract_text_from_pdf(pdf_file):
@@ -20,30 +14,46 @@ def extract_text_from_pdf(pdf_file):
                 text += extracted_text + "\n"
     return text.strip()
 
-# Function to generate questions using Groq Llama API
+# Function to generate questions using Groq API
 def generate_questions(text):
-    prompt = f"Generate a list of quiz questions from the following content:\n\n{text}"
+    prompt = f"Generate a list of 15 quiz questions from the following content:\n\n{text}"
+    
+    # Split the content into smaller chunks if it exceeds the token limit
+    max_chunk_size = 6000
+    chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+    
+    # Initialize the Groq client with your API key
+    try:
+        client = Groq(api_key="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")  # Replace with your Groq API key
+    except GroqError as e:
+        st.error(f"Error initializing Groq client: {str(e)}")
+        return None
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    question_bank = ""
 
-    data = {
-        "model": "llama-3-8b",  # Use the model available in Groq Cloud
-        "messages": [{"role": "system", "content": "You are an AI that creates educational quizzes."},
-                     {"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 1000
-    }
+    # Process each chunk separately
+    for chunk in chunks:
+        try:
+            # Make the API call to generate questions for each chunk
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",  # Use the correct model name
+                messages=[{"role": "system", "content": "You are an AI that creates educational quizzes."},
+                          {"role": "user", "content": f"Generate a list of quiz questions from the following content:\n\n{chunk}"}],
+                temperature=0.7,
+                max_completion_tokens=1000,
+                top_p=1,
+                stream=True
+            )
 
-    response = requests.post(GROQ_API_URL, headers=headers, json=data)
+            # Process the streamed response
+            for chunk_response in completion:
+                question_bank += chunk_response.choices[0].delta.content or ""
 
-    if response.status_code == 200:
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
-    else:
-        return f"Error: {response.status_code}, {response.text}"
+        except Exception as e:
+            st.error(f"Error generating questions: {str(e)}")
+            return None
+
+    return question_bank
 
 # Function to create a downloadable PDF of questions
 def create_pdf(question_text):
@@ -58,7 +68,7 @@ def create_pdf(question_text):
     return pdf_path
 
 # Streamlit UI
-st.title("📚 Upload Learning Material & Generate Question Bank")
+st.title("📚 Upload Learning Material ")
 st.write("Upload a textbook or chapter, and AI will generate a question bank.")
 
 # File uploader
@@ -74,24 +84,29 @@ if uploaded_file:
         with st.spinner("Generating AI-powered question bank..."):
             question_bank = generate_questions(text_content)
 
-        st.text_area("Generated Question Bank", question_bank, height=300)
+        if question_bank:
+            st.text_area("Generated Question Bank", question_bank, height=300)
 
-        # Save as PDF
-        pdf_path = create_pdf(question_bank)
+            # Save as PDF
+            pdf_path = create_pdf(question_bank)
 
-        # Download Button
-        with open(pdf_path, "rb") as file:
-            st.download_button(
-                label="📥 Download Question Bank",
-                data=file,
-                file_name="Adaptify_Question_Bank.pdf",
-                mime="application/pdf"
+            # Layout with columns
+            col1,col2 = st.columns(2)
+            # Download Button
+            with col1:
+                with open(pdf_path, "rb") as file:
+                    st.download_button(
+                        label="📥 Download Question Bank",
+                        data=file,
+                        file_name="Adaptify_Question_Bank.pdf",
+                        mime="application/pdf",
+                        use_container_width=True  # Ensures the button spans the entire column width
             )
-
         # Start Adaptive Assessment
-        if st.button("🚀 Start Adaptive Assessment"):
-            st.session_state['questions'] = question_bank.split("\n")  # Store questions for assessment page
-            st.switch_page("assessment.py")  # Redirect to assessment page
+            with col2:
+                if st.button("🚀 Start Assessment", key="assessment_button", use_container_width=True):
+                    st.session_state['questions'] = question_bank.split("\n")  # Store questions for assessment page
+                    st.switch_page("assessment.py")  # Redirect to assessment page
 
     else:
         st.error("Failed to extract text from the PDF. Please upload a valid document.")
